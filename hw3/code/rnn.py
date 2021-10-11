@@ -14,17 +14,15 @@ class Model(tf.keras.Model):
 
         super(Model, self).__init__()
 
-        # TODO: initialize vocab_size, emnbedding_size
-
         self.vocab_size = vocab_size
         self.window_size = 20 # DO NOT CHANGE!
-        self.embedding_size = _ #TODO
-        self.batch_size = _ #TODO 
+        self.embedding_size = 128
+        self.batch_size = 64
 
-        # TODO: initialize embeddings and forward pass weights (weights, biases)
-        # Note: You can now use tf.keras.layers!
-        # - use tf.keras.layers.Dense for feed forward layers: https://www.tensorflow.org/api_docs/python/tf/keras/layers/Dense
-        # - and use tf.keras.layers.GRU or tf.keras.layers.LSTM for your RNN 
+        self.E = tf.Variable(tf.random.truncated_normal([self.vocab_size, self.embedding_size], stddev=.1, dtype=tf.float32))
+        self.layer1 = tf.keras.layers.GRU(256, activation='relu', return_sequences=True, return_state=True) #ACTIVATION?
+        self.layer2 = tf.keras.layers.Dense(4096, activation='relu')
+        self.layer3 = tf.keras.layers.Dense(self.vocab_size)
 
     def call(self, inputs, initial_state):
         """
@@ -38,9 +36,12 @@ class Model(tf.keras.Model):
         using LSTM and only the probabilites as a tensor and a final_state as a tensor when using GRU 
         """
         
-        #TODO: Fill in 
-        
-        return None,None
+        embedding = tf.nn.embedding_lookup(self.E, inputs)
+        layer1Output, final_state = self.layer1(embedding, initial_state=initial_state)
+        layer2Output = self.layer2(layer1Output)
+        layer3Output = self.layer3(layer2Output)
+        probs = tf.nn.softmax(layer3Output)
+        return probs, final_state
 
     def loss(self, probs, labels):
         """
@@ -53,11 +54,7 @@ class Model(tf.keras.Model):
         :return: the loss of the model as a tensor of size 1
         """
 
-        #TODO: Fill in
-        #We recommend using tf.keras.losses.sparse_categorical_crossentropy
-        #https://www.tensorflow.org/api_docs/python/tf/keras/losses/sparse_categorical_crossentropy
-
-        return None
+        return tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(labels, probs))
 
 
 def train(model, train_inputs, train_labels):
@@ -69,9 +66,31 @@ def train(model, train_inputs, train_labels):
     :param train_labels: train labels (all labels for training) of shape (num_labels,)
     :return: None
     """
-    #TODO: Fill in
+    
+    train_inputs = train_inputs[:train_inputs.shape[0] // 20 * 20]
+    train_labels = train_labels[:train_labels.shape[0] // 20 * 20]
+    train_inputs = tf.reshape(train_inputs, [-1, model.window_size])
+    train_labels = tf.reshape(train_labels, [-1, model.window_size])
+    
+    num_examples = train_labels.shape.as_list()[0]
+    shuffle_indices = np.arange(0, num_examples)
+    shuffle_indices = tf.random.shuffle(shuffle_indices)
+    train_inputs = tf.gather(train_inputs, shuffle_indices)
+    train_labels = tf.gather(train_labels, shuffle_indices)
 
-    pass
+    optimizer = tf.keras.optimizers.Adam(.001)
+
+    for i in range(0, num_examples, model.batch_size):
+        input_batch = train_inputs[i:i + model.batch_size, :]
+        label_batch = train_labels[i:i + model.batch_size, :]
+        
+        with tf.GradientTape() as tape:
+            probs = model.call(input_batch, None)
+            probs = probs[0]
+            loss = model.loss(probs, label_batch)
+
+        gradients = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
 
 def test(model, test_inputs, test_labels):
@@ -84,10 +103,20 @@ def test(model, test_inputs, test_labels):
     :returns: perplexity of the test set
     """
     
-    #TODO: Fill in
-    #NOTE: Ensure a correct perplexity formula (different from raw loss)
-
-    pass  
+    test_inputs = test_inputs[:test_inputs.shape[0] // 20 * 20]
+    test_labels = test_labels[:test_labels.shape[0] // 20 * 20]
+    test_inputs = tf.reshape(test_inputs, [-1, model.window_size])
+    test_labels = tf.reshape(test_labels, [-1, model.window_size])
+    
+    perplexities = []
+    for i in range(0, test_labels.shape.as_list()[0], model.batch_size):
+        input_batch = test_inputs[i:i + model.batch_size, :]
+        label_batch = test_labels[i:i + model.batch_size, :]
+        
+        probs = model.call(input_batch, None)
+        probs = probs[0]
+        perplexities.append(model.loss(probs, label_batch))
+    return np.exp(np.mean(np.array(perplexities)))
 
 
 def generate_sentence(word1, length, vocab, model, sample_n=10):
@@ -123,24 +152,38 @@ def generate_sentence(word1, length, vocab, model, sample_n=10):
 
 
 def main():
-    # TO-DO: Pre-process and vectorize the data
-    # HINT: Please note that you are predicting the next word at each timestep, so you want to remove the last element
-    # from train_x and test_x. You also need to drop the first element from train_y and test_y.
-    # If you don't do this, you will see impossibly small perplexities.
+    all_data = get_data('data/train.txt', 'data/test.txt')
+    trainid = all_data[0]
+    testid = all_data[1]
+    word2id = all_data[2]
     
-    # TO-DO:  Separate your train and test data into inputs and labels
-
-    # TODO: initialize model and tensorflow variables
-    model = None
-
-    # TODO: Set-up the training step
-
-    # TODO: Set up the testing steps
-
-    # Print out perplexity 
-
-    # BONUS: Try printing out various sentences with different start words and sample_n parameters 
+    #trainid = trainid[:len(trainid) // 20 * 20 + 1]
+    #testid = testid[:len(testid) // 20 * 20 + 1]
     
+    train_inputs = []
+    train_labels = []
+    for i in range(0, len(trainid)-1, 20):
+        train_inputs += (trainid[i:i+20])
+        train_labels += (trainid[i+1:i+21])
+    test_inputs = []
+    test_labels = []
+    for i in range(0, len(testid)-1, 20):
+        test_inputs += (testid[i:i+20])
+        test_labels += (testid[i+1:i+21])
+    train_inputs = np.array(train_inputs)
+    train_labels = np.array(train_labels)
+    test_inputs = np.array(test_inputs)
+    test_labels = np.array(test_labels)
+
+    model = Model(len(word2id))
+    
+    train(model, train_inputs, train_labels)
+    
+    perplexity = test(model, test_inputs, test_labels)
+    
+    print(perplexity)
+
+    generate_sentence('the', 'west', 8, word2id, model)
 
 if __name__ == '__main__':
     main()
